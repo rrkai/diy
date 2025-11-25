@@ -1,7 +1,7 @@
 sudo bash << 'SCRIPT_END'
 #!/usr/bin/env bash
 set -euo pipefail
-readonly TARGET_DNS="1.1.1.1#cloudflare-dns.com 8.8.8.8#dns.google"
+readonly TARGET_DNS="1.1.1.1#cloudflare-dns.com 9.9.9.9#dns10.quad9.net"
 readonly SECURE_RESOLVED_CONFIG="[Resolve]
 DNS=${TARGET_DNS}
 LLMNR=no
