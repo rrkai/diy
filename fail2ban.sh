@@ -89,7 +89,7 @@ filter = sshd
 port = $SSH_PORT
 maxretry = 10
 findtime = 300
-bantime = 1800
+bantime = 3600
 action = %(action_)s[port="%(port)s", protocol="%(protocol)s", logpath="%(logpath)s", chain="%(chain)s"]
 logpath = $LOG_PATH
 EOF
@@ -121,7 +121,7 @@ if systemctl is-active --quiet fail2ban && \
     echo -e "\033[1;36m│\033[0m  防护规则:                                  \033[1;36m│\033[0m"
     echo -e "\033[1;36m│\033[0m    • 最大重试: \033[1;33m10次\033[0m                        \033[1;36m│\033[0m"
     echo -e "\033[1;36m│\033[0m    • 监测时间: \033[1;33m5分钟\033[0m                       \033[1;36m│\033[0m"
-    echo -e "\033[1;36m│\033[0m    • 封禁时长: \033[1;33m30分钟\033[0m                      \033[1;36m│\033[0m"
+    echo -e "\033[1;36m│\033[0m    • 封禁时长: \033[1;33m60分钟\033[0m                      \033[1;36m│\033[0m"
     echo -e "\033[1;36m└─────────────────────────────────────────────┘\033[0m\n"
     
     # 显示实时状态
