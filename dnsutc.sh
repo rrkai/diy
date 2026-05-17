@@ -1,0 +1,204 @@
+#!/bin/bash
+
+# ==========================================
+# 颜色定义
+# ==========================================
+green="\033[32m"
+yellow="\033[33m"
+red="\033[31m"
+none="\033[0m"
+
+# 确保以 root 权限运行
+if [[ $EUID -ne 0 ]]; then
+   echo -e "${red}错误: 请使用 root 权限运行此脚本。${none}"
+   exit 1
+fi
+
+echo -e "${green}=== 开始优化系统配置 ===${none}"
+
+# ==========================================
+# 1. 自动设置 1GB Swap (强制覆盖现有配置)
+# ==========================================
+echo -e "${green}--- [1/3] 配置 1GB Swap 空间 ---${none}"
+SWAP_FILE="/swapfile"
+SWAP_SIZE="1G"
+
+# 如果 Swap 正在使用，先关闭它
+if swapon --show | grep -q "$SWAP_FILE"; then
+    echo -e "${yellow}检测到 Swap ($SWAP_FILE) 正在运行，正在关闭...${none}"
+    swapoff "$SWAP_FILE"
+fi
+
+# 如果文件已存在，直接删除以便重新创建（覆盖）
+if [ -f "$SWAP_FILE" ]; then
+    echo -e "${yellow}检测到旧的 Swap 文件，正在删除并准备重新创建...${none}"
+    rm -f "$SWAP_FILE"
+fi
+
+echo -e "${green}正在创建 $SWAP_SIZE 的 Swap 文件...${none}"
+# 优先使用 fallocate 预分配空间（速度快），如果文件系统不支持则降级使用 dd
+fallocate -l $SWAP_SIZE $SWAP_FILE || dd if=/dev/zero of=$SWAP_FILE bs=1M count=1024 status=progress
+
+# 设置安全权限并格式化为 Swap
+chmod 600 $SWAP_FILE
+mkswap $SWAP_FILE
+swapon $SWAP_FILE
+
+# 写入 fstab 实现开机自动挂载持久化
+if ! grep -q "$SWAP_FILE" /etc/fstab; then
+    echo "$SWAP_FILE none swap sw 0 0" >> /etc/fstab
+    echo -e "${green}已将 Swap 配置写入 /etc/fstab 实现持久化。${none}"
+fi
+echo -e "${green}Swap 重新创建并启用成功。${none}"
+
+# ==========================================
+# 2. 动态设置时区并安装/开启系统时间同步
+# ==========================================
+echo -e "${green}--- [2/3] 配置时区和 systemd-timesyncd ---${none}"
+
+echo -e "${green}正在检测服务器 IP 地理位置以决定默认时区...${none}"
+# 使用 ip-api.com 获取当前 IP 所在的时区 (纯文本格式返回，提取速度快)
+IP_TZ=$(curl -s --max-time 5 http://ip-api.com/line?fields=timezone || echo "UTC")
+
+# 保留原脚本的 IP 地理位置判断逻辑：亚洲区域默认 HKT，否则默认 UTC
+if [[ "$IP_TZ" == Asia/* ]]; then
+    DEFAULT_TZ="Asia/Hong_Kong"
+    DEFAULT_TZ_LABEL="HKT (Asia/Hong_Kong)"
+    echo -e "${green}检测到服务器位于亚洲 (当前定位: $IP_TZ)，默认时区为 $DEFAULT_TZ_LABEL。${none}"
+else
+    DEFAULT_TZ="UTC"
+    DEFAULT_TZ_LABEL="UTC"
+    echo -e "${green}服务器非亚洲区域 (当前定位: $IP_TZ) 或检测超时，默认时区为 UTC。${none}"
+fi
+
+# 支持手动输入常见时区缩写；直接回车则使用上面根据 IP 判断出的默认时区
+map_timezone_input() {
+    local input="${1^^}"
+    case "$input" in
+        HKT) echo "Asia/Hong_Kong" ;;
+        UTC|GMT|Z) echo "UTC" ;;
+        CET) echo "Europe/Berlin" ;;
+        CEST) echo "Europe/Berlin" ;;
+        EET) echo "Europe/Helsinki" ;;
+        WET) echo "Europe/Lisbon" ;;
+        BST) echo "Europe/London" ;;
+        EST) echo "America/New_York" ;;
+        EDT) echo "America/New_York" ;;
+        CST) echo "America/Chicago" ;;
+        CDT) echo "America/Chicago" ;;
+        MST) echo "America/Denver" ;;
+        MDT) echo "America/Denver" ;;
+        PST) echo "America/Los_Angeles" ;;
+        PDT) echo "America/Los_Angeles" ;;
+        JST) echo "Asia/Tokyo" ;;
+        KST) echo "Asia/Seoul" ;;
+        SGT) echo "Asia/Singapore" ;;
+        MYT) echo "Asia/Kuala_Lumpur" ;;
+        CST-CHINA|CHINA|CN) echo "Asia/Shanghai" ;;
+        IST) echo "Asia/Kolkata" ;;
+        AEST) echo "Australia/Sydney" ;;
+        AEDT) echo "Australia/Sydney" ;;
+        *) echo "$1" ;;
+    esac
+}
+
+echo -e "${yellow}请输入时区缩写或完整时区名称，例如 HKT、CET、UTC、Asia/Hong_Kong。${none}"
+read -r -p "时区 [直接回车使用默认: $DEFAULT_TZ_LABEL]: " USER_TZ_INPUT
+
+if [[ -z "$USER_TZ_INPUT" ]]; then
+    TARGET_TZ="$DEFAULT_TZ"
+    echo -e "${green}未手动输入时区，将使用根据 IP 判断出的默认时区: $TARGET_TZ。${none}"
+else
+    TARGET_TZ=$(map_timezone_input "$USER_TZ_INPUT")
+    echo -e "${green}已选择手动指定时区: $USER_TZ_INPUT -> $TARGET_TZ。${none}"
+fi
+
+# 校验时区是否可用，避免 timedatectl 因无效输入而中断脚本
+if ! timedatectl list-timezones 2>/dev/null | grep -Fxq "$TARGET_TZ" && [[ "$TARGET_TZ" != "UTC" ]]; then
+    echo -e "${red}错误: 无效时区 '$TARGET_TZ'。${none}"
+    echo -e "${yellow}将回退使用根据 IP 判断出的默认时区: $DEFAULT_TZ。${none}"
+    TARGET_TZ="$DEFAULT_TZ"
+fi
+
+timedatectl set-timezone "$TARGET_TZ"
+
+# 检查 systemd-timesyncd 是否安装，未安装则使用 apt 安装
+if ! command -v systemd-timesyncd &> /dev/null && ! dpkg -s systemd-timesyncd &> /dev/null; then
+    echo -e "${yellow}未检测到 systemd-timesyncd 服务，正在尝试通过 apt 安装...${none}"
+    apt-get update -y && apt-get install -y systemd-timesyncd
+fi
+
+echo -e "${green}正在尝试启用并启动 NTP 时间同步...${none}"
+# 尝试通过 timedatectl 开启 NTP (容错处理：若是 LXC/OpenVZ 容器则静默忽略报错)
+if ! timedatectl set-ntp true 2>/dev/null; then
+    echo -e "${yellow}提示: 当前环境不支持通过 timedatectl 强制开启 NTP (常见于 LXC/OpenVZ 容器)。${none}"
+    echo -e "${yellow}时间通常已由宿主机自动管理，此提示可安全忽略。${none}"
+fi
+
+# 尝试启动 timesyncd 服务
+systemctl enable --now systemd-timesyncd 2>/dev/null || true
+systemctl restart systemd-timesyncd 2>/dev/null || true
+echo -e "${green}时区已成功设置为 $TARGET_TZ，并已完成系统时间同步配置。${none}"
+
+# ==========================================
+# 3. 优化 DNS 配置
+# ==========================================
+echo -e "${green}--- [3/3] 配置 DNS 服务 ---${none}"
+
+# 如果没有备份，先备份原文件
+if [[ ! -f /etc/resolv.conf.bak ]]; then
+    cp /etc/resolv.conf /etc/resolv.conf.bak
+    echo -e "${green}已备份原 /etc/resolv.conf 到 /etc/resolv.conf.bak${none}"
+else
+    echo -e "${yellow}/etc/resolv.conf.bak 已存在。${none}"
+fi
+
+# 清空 /etc/resolv.conf 并写入新的 DNS 配置
+cat > /etc/resolv.conf << EOF
+nameserver 1.1.1.1
+nameserver 9.9.9.9
+EOF
+echo -e "${green}已清空 /etc/resolv.conf 并设置新的 DNS: 1.1.1.1, 9.9.9.9${none}"
+
+# 尝试检查并处理 systemd-resolved 等可能覆盖配置的服务
+if command -v systemctl &> /dev/null && systemctl is-active --quiet systemd-resolved; then
+    echo -e "${yellow}检测到 systemd-resolved 服务正在运行，可能会影响 /etc/resolv.conf 的持久性。${none}"
+    echo -e "${yellow}建议检查 /etc/systemd/resolved.conf 或相关网络配置。${none}"
+    
+    # 创建 /etc/resolv.conf 的符号链接以实现持久化
+    if [[ ! -L /etc/resolv.conf ]] && [[ -f /run/systemd/resolve/resolv.conf ]]; then
+        echo -e "${green}正在将 /etc/resolv.conf 配置为指向 systemd-resolved 的配置文件...${none}"
+        ln -sf /run/systemd/resolve/resolv.conf /etc/resolv.conf
+    fi
+
+    # 然后修改 systemd-resolved 的配置
+    if [[ -f /etc/systemd/resolved.conf ]]; then
+         # 备份 resolved.conf
+         if [[ ! -f /etc/systemd/resolved.conf.bak ]]; then
+             cp /etc/systemd/resolved.conf /etc/systemd/resolved.conf.bak
+             echo -e "${green}已备份原 /etc/systemd/resolved.conf 到 /etc/systemd/resolved.conf.bak${none}"
+         fi
+         
+         # 先删除旧的 DNS/FallbackDNS 行，防止脚本重复运行导致数据不断累加
+         sed -i '/^DNS=/d' /etc/systemd/resolved.conf
+         sed -i '/^FallbackDNS=/d' /etc/systemd/resolved.conf
+         
+         # 在 [Resolve] 块下直接追加配置
+         sed -i '/^\[Resolve\]/a DNS=1.1.1.1 9.9.9.9\nFallbackDNS=9.9.9.9 1.1.1.1' /etc/systemd/resolved.conf
+         
+         # 启用 DNSSEC 和 DNSOverTLS
+         sed -i 's/^#*DNSSEC=.*/DNSSEC=yes/' /etc/systemd/resolved.conf
+         sed -i 's/^#*DNSOverTLS=.*/DNSOverTLS=yes/' /etc/systemd/resolved.conf
+       
+         # 重启服务使配置生效
+         systemctl reload-or-restart systemd-resolved
+         echo -e "${green}systemd-resolved 配置已更新并重启。${none}"
+    fi
+elif command -v nmcli &> /dev/null; then
+    echo -e "${yellow}检测到 NetworkManager，可能会影响 /etc/resolv.conf 的持久性。${none}"
+    echo -e "${yellow}您可能需要通过 NetworkManager 配置 DNS 或禁用其 DNS 管理功能。${none}"
+else
+    echo -e "${green}/etc/resolv.conf 已更新为新 DNS 配置。${none}"
+fi
+
+echo -e "${green}=== 所有系统优化配置执行完毕 ===${none}"
