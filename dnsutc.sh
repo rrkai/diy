@@ -158,7 +158,7 @@ cat > /etc/resolv.conf << EOF
 nameserver 1.1.1.1
 nameserver 8.8.8.8
 EOF
-echo -e "${green}已清空 /etc/resolv.conf 并设置新的 DNS: 1.1.1.1, 9.9.9.9${none}"
+echo -e "${green}已清空 /etc/resolv.conf 并设置新的 DNS: 1.1.1.1, 8.8.8.8${none}"
 
 # 尝试检查并处理 systemd-resolved 等可能覆盖配置的服务
 if command -v systemctl &> /dev/null && systemctl is-active --quiet systemd-resolved; then
@@ -184,7 +184,7 @@ if command -v systemctl &> /dev/null && systemctl is-active --quiet systemd-reso
          sed -i '/^FallbackDNS=/d' /etc/systemd/resolved.conf
          
          # 在 [Resolve] 块下直接追加配置
-         sed -i '/^\[Resolve\]/a DNS=1.1.1.1 9.9.9.9\nFallbackDNS=9.9.9.9 1.1.1.1' /etc/systemd/resolved.conf
+         sed -i '/^\[Resolve\]/a DNS=1.1.1.1 8.8.8.8\nFallbackDNS=1.1.1.1 8.8.8.8' /etc/systemd/resolved.conf
          
          # 启用 DNSSEC 和 DNSOverTLS
          sed -i 's/^#*DNSSEC=.*/DNSSEC=yes/' /etc/systemd/resolved.conf
