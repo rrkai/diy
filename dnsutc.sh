@@ -156,7 +156,7 @@ fi
 # 清空 /etc/resolv.conf 并写入新的 DNS 配置
 cat > /etc/resolv.conf << EOF
 nameserver 1.1.1.1
-nameserver 9.9.9.9
+nameserver 8.8.8.8
 EOF
 echo -e "${green}已清空 /etc/resolv.conf 并设置新的 DNS: 1.1.1.1, 9.9.9.9${none}"
 
